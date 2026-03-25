@@ -10,12 +10,16 @@ RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linu
     tar -C /opt -xzf nvim-linux-x86_64.tar.gz
 ENV PATH="$PATH:/opt/nvim-linux-x86_64/bin"
 
-#install luarocks
+# install luarocks
 RUN wget https://luarocks.org/releases/luarocks-3.13.0.tar.gz && \
     tar zxpf luarocks-3.13.0.tar.gz && \
     cd luarocks-3.13.0 && \
     ./configure && make && sudo make install && \
     cd ../ && \
     rm -rf luarocks-3.13.0
+
+# install lazy.nvim configuration
+COPY init.lua /root/.config/nvim/
+COPY lua/ /root/.config/nvm/
 
 WORKDIR /workspace

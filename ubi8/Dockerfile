@@ -43,4 +43,8 @@ RUN wget https://luarocks.org/releases/luarocks-3.13.0.tar.gz && \
     cd ../ && \
     rm -rf luarocks-3.13.0 luarocks-3.13.0.tar.gz
 
+# install lazy.nvim configuration
+COPY init.lua /root/.config/nvim/
+COPY lua/ /root/.config/nvm/
+
 WORKDIR /workspace

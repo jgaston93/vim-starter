@@ -29,7 +29,6 @@ RUN git clone https://github.com/jesseduffield/lazygit.git && \
     cd ../ && \
     rm -rf lazygit && \
     ln -s /root/go/bin/lazygit /usr/local/bin/lazygit
-ENV PATH="$PATH:/root/go/bin"
 
 # install lazy.nvim configuration
 COPY init.lua /root/.config/nvim/

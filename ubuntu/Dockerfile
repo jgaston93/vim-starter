@@ -5,6 +5,7 @@ RUN apt-get update -y && \
     curl \
     wget \
     python3 \
+    python3-pip \
     build-essential \
     git \
     cmake \
@@ -26,6 +27,9 @@ RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linu
     rm -rf /opt/nvim-linux-x86_64 && \
     tar -C /opt -xzf nvim-linux-x86_64.tar.gz
 ENV PATH="$PATH:/opt/nvim-linux-x86_64/bin"
+
+# install neovim python support
+RUN python3 -m pip install --break-system-packages  pynvim
 
 # install luarocks
 RUN wget https://luarocks.org/releases/luarocks-3.13.0.tar.gz && \

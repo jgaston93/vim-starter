@@ -7,19 +7,25 @@ return {
   config = function()
     require("mason").setup()
     require("mason-lspconfig").setup({
-      ensure_installed = { "clangd" },
+      ensure_installed = { "clangd", "rust_analyzer" },
     })
 
-    -- 1. Configure the server (Native API)
-    -- This merges your custom settings with the defaults from nvim-lspconfig
+    -- Clangd
     vim.lsp.config("clangd", {
-      -- Example: custom command or flags
       cmd = { "clangd", "--background-index", "--clang-tidy" },
-      -- Add other server-specific settings here
     })
 
-    -- 2. Enable the server
+    -- Rust Analyzer
+    vim.lsp.config("rust_analyzer", {
+      settings = {
+        ["rust-analyzer"] = {
+          check = { command = "clippy" },
+          cargo = { allFeatures = true },
+        },
+      },
+    })
+
     vim.lsp.enable("clangd")
+    vim.lsp.enable("rust_analyzer")
   end,
 }
-

@@ -1,7 +1,20 @@
 FROM ubuntu:24.04
 
-RUN apt-get update && \
-    apt-get -y install curl wget python3 build-essential git cmake lua5.1 liblua5.1-dev unzip ripgrep golang-go clangd clang-format && \
+RUN apt-get update -y && \
+    apt-get -y install \
+    curl \
+    wget \
+    python3 \
+    build-essential \
+    git \
+    cmake \
+    lua5.1 \
+    liblua5.1-dev \
+    unzip \
+    ripgrep \
+    golang-go \
+    clangd \
+    clang-format && \
     apt-get clean
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

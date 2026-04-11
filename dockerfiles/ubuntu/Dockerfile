@@ -11,6 +11,7 @@ RUN apt-get update -y && \
     cmake \
     lua5.1 \
     liblua5.1-dev \
+    npm \
     unzip \
     ripgrep \
     golang-go \
@@ -47,8 +48,16 @@ RUN git clone https://github.com/jesseduffield/lazygit.git && \
     rm -rf lazygit && \
     ln -s /root/go/bin/lazygit /usr/local/bin/lazygit
 
+# install opencode
+RUN curl -fsSL https://opencode.ai/install | bash
+
+#install codebase-memory-mcp
+RUN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+
 # install lazy.nvim configuration
-COPY init.lua /root/.config/nvim/
-COPY lua/ /root/.config/nvim/lua/
+COPY nvim/ /root/.config/nvim/
+COPY opencode/ /root/.config/opencode/
+
+ENV PATH="$PATH:~/.local/bin"
 
 WORKDIR /workspace

@@ -1,0 +1,142 @@
+# Stage 1: Builder - Build tools from source
+ARG UBI_VERSION="latest"
+FROM registry.access.redhat.com/ubi8/ubi:${UBI_VERSION} AS builder
+
+ARG RUST_VERSION="1.95"
+ARG NEOVIM_TAG="v0.12.2"
+ARG LAZYGIT_TAG="v0.61.1"
+
+# Install build dependencies
+RUN dnf update -y && \
+    dnf install -y \
+        git \
+        curl \
+        wget \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        golang \
+        tar \
+        gzip \
+        clang \
+        clang-devel \
+        llvm-devel \
+    && dnf clean all
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    . ~/.cargo/env && \
+    rustup toolchain install ${RUST_VERSION} && \
+    rustup default ${RUST_VERSION}
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Build fd-find, tree-sitter, and stylua via cargo
+RUN cargo install fd-find tree-sitter-cli stylua --locked
+
+# Build Neovim from source (required due to glibc compatibility with UBI8)
+RUN git clone --depth 1 --branch ${NEOVIM_TAG} https://github.com/neovim/neovim.git && \
+    cd neovim && \
+    make -j$(nproc) CMAKE_BUILD_TYPE=Release && \
+    make install && \
+    cd ../ && \
+    rm -rf neovim
+
+# Build lazygit from source
+RUN git clone --depth 1 --branch ${LAZYGIT_TAG} https://github.com/jesseduffield/lazygit.git && \
+    cd lazygit && \
+    go install && \
+    cd ../ && \
+    rm -rf lazygit
+
+# Clean build caches to reduce layer size
+RUN rm -rf ~/.cargo/{registry,git} && \
+    go clean -cache -modcache
+
+# Stage 2: Final image with runtime dependencies only
+FROM registry.access.redhat.com/ubi8/ubi:${UBI_VERSION}
+
+ARG RIPGREP_VERSION="14.1.1"
+ARG FZF_VERSION="0.58.0"
+ARG OPENCODE_VERSION="1.14.33"
+
+LABEL org.opencontainers.image.title="vim-starter-ubi8"
+LABEL org.opencontainers.image.description="Neovim development environment with LazyVim, OpenCode, and dev tools (UBI8 base)"
+LABEL org.opencontainers.image.version="2.0"
+LABEL org.opencontainers.image.source="https://github.com/jgaston93/vim-starter"
+
+# Install minimal runtime dependencies and EPEL for additional packages
+RUN dnf update -y && \
+    dnf install -y \
+        https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm && \
+    dnf update -y && \
+    dnf install -y \
+        git \
+        curl \
+        wget \
+        tar \
+        gzip \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        gdb \
+        unzip \
+        xclip \
+        python3 \
+        python3-pip \
+        python3-devel \
+        clang-tools-extra \
+    && dnf clean all
+
+# Install ripgrep (pre-built binary)
+RUN curl -LO https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
+    tar xzf ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl.tar.gz && \
+    cp ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl/rg /usr/local/bin/ && \
+    rm -rf ripgrep-${RIPGREP_VERSION}-x86_64-unknown-linux-musl*
+
+# Install fzf (pre-built binary)
+RUN curl -LO https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz && \
+    tar xzf fzf-${FZF_VERSION}-linux_amd64.tar.gz && \
+    mv fzf /usr/local/bin/ && \
+    rm fzf-${FZF_VERSION}-linux_amd64.tar.gz
+
+# Install Node.js LTS (for LSP servers via Mason)
+RUN curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && \
+    dnf install -y nodejs && \
+    dnf clean all
+
+# Copy built binaries from builder stage
+COPY --from=builder /usr/local/bin/nvim /usr/local/bin/
+COPY --from=builder /usr/local/share/nvim /usr/local/share/nvim
+COPY --from=builder /root/.cargo/bin/fd /usr/local/bin/
+COPY --from=builder /root/.cargo/bin/tree-sitter /usr/local/bin/
+COPY --from=builder /root/.cargo/bin/stylua /usr/local/bin/
+COPY --from=builder /root/go/bin/lazygit /usr/local/bin/
+
+# Install OpenCode binary
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VERSION}
+
+ENV PATH="/root/.opencode/bin:${PATH}"
+
+# Clone LazyVim starter configuration
+RUN git clone --depth 1 https://github.com/LazyVim/starter ~/.config/nvim && \
+    rm -rf ~/.config/nvim/.git
+
+# Pre-install common treesitter parsers
+COPY init-treesitter.sh /tmp/
+RUN chmod +x /tmp/init-treesitter.sh && \
+    /tmp/init-treesitter.sh && \
+    rm /tmp/init-treesitter.sh
+
+# Install Python packages for Neovim support
+RUN pip3 install --no-cache-dir neovim pynvim
+
+# Set up workspace
+WORKDIR /workspace
+
+# Volume for OpenCode configuration and workspace
+VOLUME ["/workspace", "/root/.config/opencode"]
+
+CMD ["/bin/bash"]

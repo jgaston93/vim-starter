@@ -1,0 +1,120 @@
+# Stage 1: Builder - Build tools from source
+ARG UBUNTU_VERSION="24.04"
+FROM ubuntu:${UBUNTU_VERSION} AS builder
+
+ARG RUST_VERSION="1.95"
+ARG NEOVIM_TAG="v0.12.2"
+ARG LAZYGIT_TAG="v0.61.1"
+
+# Install build dependencies
+RUN apt update -y && \
+    apt install -y \
+        git \
+        curl \
+        wget \
+        build-essential \
+        cmake \
+        golang \
+        clang \
+        ca-certificates \
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    . ~/.cargo/env && \
+    rustup toolchain install ${RUST_VERSION} && \
+    rustup default ${RUST_VERSION}
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Build tree-sitter, fd-find, and stylua
+RUN cargo install --locked tree-sitter-cli fd-find stylua
+
+# Build Neovim from source
+RUN git clone --depth 1 --branch ${NEOVIM_TAG} https://github.com/neovim/neovim.git && \
+    cd neovim && \
+    make -j$(nproc) CMAKE_BUILD_TYPE=Release && \
+    make install && \
+    cd ../ && \
+    rm -rf neovim
+
+# Build lazygit from source
+RUN git clone --depth 1 --branch ${LAZYGIT_TAG} https://github.com/jesseduffield/lazygit.git && \
+    cd lazygit && \
+    go install && \
+    cd ../ && \
+    rm -rf lazygit
+
+# Clean build caches to reduce layer size
+RUN rm -rf ~/.cargo/{registry,git} && \
+    go clean -cache -modcache
+
+# Stage 2: Final image with runtime dependencies only
+FROM ubuntu:${UBUNTU_VERSION}
+
+ARG OPENCODE_VERSION="1.14.33"
+
+LABEL org.opencontainers.image.title="vim-starter-ubuntu"
+LABEL org.opencontainers.image.description="Neovim development environment with LazyVim, OpenCode, and dev tools"
+LABEL org.opencontainers.image.version="2.0"
+LABEL org.opencontainers.image.source="https://github.com/jgaston93/vim-starter"
+
+# Install runtime dependencies
+RUN apt update -y && \
+    apt install -y \
+        git \
+        curl \
+        wget \
+        ripgrep \
+        fzf \
+        ca-certificates \
+        build-essential \
+        cmake \
+        gdb \
+        unzip \
+        xclip \
+        python3 \
+        python3-pip \
+        python3-venv \
+        clang-format \
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js LTS (for LSP servers via Mason)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
+    apt update -y && \
+    apt install -y nodejs && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
+# Copy built binaries from builder stage
+COPY --from=builder /usr/local/bin/nvim /usr/local/bin/
+COPY --from=builder /usr/local/share/nvim /usr/local/share/nvim
+COPY --from=builder /root/.cargo/bin/tree-sitter /usr/local/bin/
+COPY --from=builder /root/.cargo/bin/fd /usr/local/bin/
+COPY --from=builder /root/.cargo/bin/stylua /usr/local/bin/
+COPY --from=builder /root/go/bin/lazygit /usr/local/bin/
+
+# Install OpenCode binary
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version ${OPENCODE_VERSION}
+
+ENV PATH="/root/.opencode/bin:${PATH}"
+
+# Clone LazyVim starter configuration
+RUN git clone --depth 1 https://github.com/LazyVim/starter ~/.config/nvim && \
+    rm -rf ~/.config/nvim/.git
+
+# Pre-install common treesitter parsers
+COPY init-treesitter.sh /tmp/
+RUN chmod +x /tmp/init-treesitter.sh && \
+    /tmp/init-treesitter.sh && \
+    rm /tmp/init-treesitter.sh
+
+# Install Python packages for Neovim support
+RUN pip3 install --no-cache-dir neovim pynvim
+
+# Set up workspace
+WORKDIR /workspace
+
+# Volume for OpenCode configuration and workspace
+VOLUME ["/workspace", "/root/.config/opencode"]
+
+CMD ["/bin/bash"]

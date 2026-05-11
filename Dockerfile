@@ -1,64 +1,70 @@
-ARG UBUNTU_VERSION="latest"
-FROM ubuntu:${UBUNTU_VERSION}
+# Single parameterized Dockerfile for the vim-starter dev environment.
+#
+# Pick any supported base image with --build-arg BASE_IMAGE.  The install
+# scripts detect the distro internally, so the same Dockerfile produces a
+# working image on Ubuntu, Debian, RHEL/UBI, Rocky/Alma, or Fedora.
+#
+# Examples:
+#   docker build -t vim-starter:ubuntu --build-arg BASE_IMAGE=ubuntu:24.04 .
+#   docker build -t vim-starter:ubi8   --build-arg BASE_IMAGE=registry.access.redhat.com/ubi8/ubi .
+#   docker build -t vim-starter:ubi9   --build-arg BASE_IMAGE=registry.access.redhat.com/ubi9/ubi .
+#   docker build -t vim-starter:fedora --build-arg BASE_IMAGE=fedora:40 .
+#
+# To layer this onto an existing project dev image, you have two clean options:
+#
+#   1.  Copy the toolchain artifacts in (fastest, no rebuild):
+#         FROM your-project-base:latest
+#         COPY --from=vim-starter:latest /root/.local  /root/.local
+#         COPY --from=vim-starter:latest /root/.cargo  /root/.cargo
+#         COPY --from=vim-starter:latest /root/.nvm    /root/.nvm
+#         COPY --from=vim-starter:latest /root/.opencode /root/.opencode
+#         COPY --from=vim-starter:latest /root/.config/nvim /root/.config/nvim
+#         ENV PATH=/root/.local/bin:/root/.cargo/bin:/root/.opencode/bin:$PATH
+#         RUN echo 'source /root/.local/share/vim-starter/env.sh' >> /root/.bashrc
+#
+#   2.  Re-run the install scripts on top of your base (works against any
+#       supported distro, slower because it rebuilds neovim from source):
+#         FROM your-project-base:latest
+#         COPY versions.env install-build-deps.sh install-user-tools.sh \
+#              install-lazyvim-config.sh /tmp/vim-starter/
+#         RUN chmod +x /tmp/vim-starter/*.sh && \
+#             /tmp/vim-starter/install-build-deps.sh && \
+#             /tmp/vim-starter/install-user-tools.sh && \
+#             /tmp/vim-starter/install-lazyvim-config.sh && \
+#             rm -rf /tmp/vim-starter
 
-ARG RUST_VERSION="1.95"
-ARG NEOVIM_TAG="v0.12.2"
-ARG LAZYGIT_TAG="v0.61.1"
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
 
-# Install packages
-# ninja-build, gettext, build-essential are required to build neovim from source
-RUN apt-get update -y && \
-    apt-get install -y \
-        git curl wget \
-        clang cmake ninja-build gettext build-essential \
-        golang \
-        npm \
-        python3-pip \
-        fzf ripgrep \
-        unzip xclip locales && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    locale-gen en_US.UTF-8
+LABEL org.opencontainers.image.title="vim-starter"
+LABEL org.opencontainers.image.description="Neovim/LazyVim dev environment with C/C++/Rust/Python(Jinja2) toolchains"
+LABEL org.opencontainers.image.source="https://github.com/jgaston93/vim-starter"
 
-ENV LANG=en_US.UTF-8
-ENV LC_ALL=en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    DEBIAN_FRONTEND=noninteractive
 
-# Install neovim npm provider
-# (fd-find is installed via cargo below — native binary, no npm shim needed)
-RUN npm install -g neovim
+# Copy installers + version pins.  Keep these in the same directory so
+# install-user-tools.sh can source versions.env from $SCRIPT_DIR.
+COPY versions.env \
+     install-build-deps.sh \
+     install-user-tools.sh \
+     install-lazyvim-config.sh \
+     /tmp/vim-starter/
 
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-    . ~/.cargo/env && \
-    rustup toolchain install ${RUST_VERSION} && \
-    rustup default ${RUST_VERSION}
+RUN chmod +x /tmp/vim-starter/*.sh && \
+    /tmp/vim-starter/install-build-deps.sh && \
+    /tmp/vim-starter/install-user-tools.sh && \
+    /tmp/vim-starter/install-lazyvim-config.sh && \
+    rm -rf /tmp/vim-starter /root/.local/src/vim-starter-build
 
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Put user-installed binaries on PATH for non-login shells too.
+ENV PATH="/root/.local/bin:/root/.cargo/bin:/root/.opencode/bin:${PATH}"
 
-# Install pynvim (Python provider for neovim)
-RUN pip install pynvim --break-system-packages
+# Login shells (and `docker run -it ... bash -l`) source the env file.
+RUN echo 'source /root/.local/share/vim-starter/env.sh' >> /root/.bashrc
 
-# Install cargo tools: tree-sitter, stylua (conform formatter), fd (replaces npm fd-find shim)
-RUN cargo install --locked tree-sitter-cli stylua fd-find
+WORKDIR /workspace
+VOLUME ["/workspace", "/root/.config/opencode"]
 
-# Build and install neovim from source (two-step: deps first, then neovim)
-# Step 1 builds luv and other bundled deps into neovim/.deps/usr.
-# Step 2 finds them automatically via CMAKE_SOURCE_DIR/.deps/usr.
-RUN git clone --depth=1 --branch ${NEOVIM_TAG} https://github.com/neovim/neovim.git && \
-    cmake -S neovim/cmake.deps -B neovim/.deps -DCMAKE_BUILD_TYPE=Release -G Ninja && \
-    cmake --build neovim/.deps --parallel $(nproc) && \
-    cmake -S neovim -B neovim/build -DCMAKE_BUILD_TYPE=Release -G Ninja && \
-    cmake --build neovim/build --parallel $(nproc) && \
-    cmake --install neovim/build && \
-    rm -rf neovim
-
-# Install lazygit
-# go install with an explicit @tag fetches and builds in one step — no manual clone needed.
-# GOBIN points directly at /usr/local/bin so no extra PATH entry is required.
-# Wipe the module cache afterwards to keep the image lean.
-RUN GOBIN=/usr/local/bin go install github.com/jesseduffield/lazygit@${LAZYGIT_TAG} && \
-    rm -rf /root/go
-
-# Set up LazyVim starter config
-RUN git clone --depth=1 https://github.com/LazyVim/starter ~/.config/nvim && \
-    rm -rf ~/.config/nvim/.git
+CMD ["/bin/bash"]

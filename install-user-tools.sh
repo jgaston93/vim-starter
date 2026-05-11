@@ -23,8 +23,17 @@ info() { echo -e "${CYAN}   $*${NC}"; }
 warn() { echo -e "${YELLOW}  ! $*${NC}"; }
 die()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 
-# Allow root inside Docker (UID 0 is normal there); refuse root on a host.
-if [[ $EUID -eq 0 && ! -f /.dockerenv ]]; then
+# Allow root inside a container (UID 0 is normal there); refuse root on a host.
+# /.dockerenv only exists at `docker run` time, not during `docker build`, so we
+# also look at /proc/1/cgroup and accept an explicit override the Dockerfile sets.
+in_container() {
+  [[ -f /.dockerenv ]]                                                && return 0
+  [[ -f /run/.containerenv ]]                                         && return 0  # podman
+  grep -qE 'docker|containerd|buildkit|kubepods|lxc' /proc/1/cgroup 2>/dev/null && return 0
+  [[ "${VIM_STARTER_ALLOW_ROOT:-}" == "1" ]]                          && return 0
+  return 1
+}
+if [[ $EUID -eq 0 ]] && ! in_container; then
   die "Do not run this as root on a host system.  Run as your normal user."
 fi
 
@@ -39,12 +48,15 @@ uname_arch() {
 }
 ARCH="$(uname_arch)"
 
-PREFIX="${HOME}/.local"
-SHARE_DIR="${PREFIX}/share/vim-starter"
+# NOTE: do NOT name this variable PREFIX. `nvm` is a shell function loaded
+# into the current shell and reads $PREFIX directly; npm also dislikes it.
+# Using VS_PREFIX avoids the collision.
+VS_PREFIX="${HOME}/.local"
+SHARE_DIR="${VS_PREFIX}/share/vim-starter"
 ENV_FILE="${SHARE_DIR}/env.sh"
-BUILD_DIR="${PREFIX}/src/vim-starter-build"
+BUILD_DIR="${VS_PREFIX}/src/vim-starter-build"
 
-mkdir -p "${PREFIX}/bin" "${PREFIX}/lib" "${PREFIX}/share" "${SHARE_DIR}" "${BUILD_DIR}"
+mkdir -p "${VS_PREFIX}/bin" "${VS_PREFIX}/lib" "${VS_PREFIX}/share" "${SHARE_DIR}" "${BUILD_DIR}"
 
 # Prerequisite check — clearer error than failing mid-build.
 for cmd in git make cmake gcc curl wget python3 pip3 go; do
@@ -113,7 +125,7 @@ else
   # Step 2: build neovim itself, installing under $HOME/.local
   cmake -S "${BUILD_DIR}/neovim" -B "${BUILD_DIR}/neovim/build" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
+    -DCMAKE_INSTALL_PREFIX="${VS_PREFIX}" \
     -G Ninja
   cmake --build "${BUILD_DIR}/neovim/build" --parallel "$(nproc)"
   cmake --install "${BUILD_DIR}/neovim/build"
@@ -126,7 +138,7 @@ log "Installing lazygit ${LAZYGIT_TAG}"
 if has lazygit && lazygit --version 2>&1 | grep -qF "${LAZYGIT_TAG#v}"; then
   info "lazygit ${LAZYGIT_TAG} already installed, skipping"
 else
-  GOBIN="${PREFIX}/bin" GOPATH="${PREFIX}/go" \
+  GOBIN="${VS_PREFIX}/bin" GOPATH="${VS_PREFIX}/go" \
     go install "github.com/jesseduffield/lazygit@${LAZYGIT_TAG}"
 fi
 
@@ -144,7 +156,7 @@ else
     cd "${BUILD_DIR}"
     curl -fsSL -O "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${RG_TARBALL}"
     tar xzf "${RG_TARBALL}"
-    install -m 0755 "${RG_TARBALL%.tar.gz}/rg" "${PREFIX}/bin/rg"
+    install -m 0755 "${RG_TARBALL%.tar.gz}/rg" "${VS_PREFIX}/bin/rg"
     rm -rf "${RG_TARBALL%.tar.gz}" "${RG_TARBALL}"
   )
 fi
@@ -163,12 +175,16 @@ else
     cd "${BUILD_DIR}"
     curl -fsSL -O "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/${FZF_TARBALL}"
     tar xzf "${FZF_TARBALL}"
-    install -m 0755 fzf "${PREFIX}/bin/fzf"
+    install -m 0755 fzf "${VS_PREFIX}/bin/fzf"
     rm -f fzf "${FZF_TARBALL}"
   )
 fi
 
 # ─── Node via nvm ─────────────────────────────────────────────────────────────
+# nvm refuses to run if $PREFIX is set in the environment (an npm convention).
+# Unset it here in case a parent shell or base image exports one.
+unset PREFIX npm_config_prefix || true
+
 log "Installing nvm ${NVM_VERSION} + Node ${NODE_LTS_MAJOR} LTS"
 if [[ ! -s "${HOME}/.nvm/nvm.sh" ]]; then
   curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | PROFILE=/dev/null bash

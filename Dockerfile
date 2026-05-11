@@ -42,7 +42,8 @@ LABEL org.opencontainers.image.source="https://github.com/jgaston93/vim-starter"
 
 ENV LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    VIM_STARTER_ALLOW_ROOT=1
 
 # Copy installers + version pins.  Keep these in the same directory so
 # install-user-tools.sh can source versions.env from $SCRIPT_DIR.

@@ -8,10 +8,6 @@
 #   - Debian / Ubuntu                (apt-get)
 #   - RHEL / CentOS / Rocky / Alma   (dnf, with EPEL on RHEL 8/9)
 #   - Fedora                         (dnf)
-#
-# Package selection targets feature parity across distros: the same set of
-# user-facing tools is installed on every supported OS, even when a distro
-# requires extra repos (EPEL) or differently-named packages.
 
 set -euo pipefail
 
@@ -27,7 +23,7 @@ die()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Must run as root.  Try: sudo $0"
 
-[[ -r /etc/os-release ]] || die "Cannot read /etc/os-release — unknown distro."
+[[ -r /etc/os-release ]] || die "Cannot read /etc/os-release - unknown distro."
 # shellcheck disable=SC1091
 . /etc/os-release
 OS_ID="${ID:-unknown}"
@@ -44,7 +40,6 @@ esac
 
 log "Detected ${PRETTY_NAME:-$OS_ID}  (family: $FAMILY)"
 
-# ─── Debian / Ubuntu ──────────────────────────────────────────────────────────
 install_debian() {
   export DEBIAN_FRONTEND=noninteractive
 
@@ -55,7 +50,7 @@ install_debian() {
   apt-get install -y --no-install-recommends \
     ca-certificates git curl wget gnupg \
     build-essential cmake ninja-build gettext pkg-config \
-    autoconf automake libtool libtool-bin m4 \
+    autoconf automake libtool libtool-bin m4 gperf patch \
     clang clangd clang-format clang-tidy lldb \
     gcc g++ gdb \
     bear \
@@ -73,12 +68,9 @@ install_debian() {
   rm -rf /var/lib/apt/lists/*
 }
 
-# ─── RHEL / CentOS / Rocky / Alma / Fedora ────────────────────────────────────
 install_rhel() {
   local major="${VERSION_ID%%.*}"
 
-  # EPEL provides ninja-build, bear, etc. on RHEL/CentOS/Rocky/Alma 8 and 9.
-  # Fedora has these in the main repos, so skip EPEL there.
   if [[ "$OS_ID" != "fedora" ]]; then
     if ! dnf -q repolist enabled 2>/dev/null | grep -qi epel; then
       info "Enabling EPEL for major=${major}"
@@ -90,19 +82,47 @@ install_rhel() {
     fi
   fi
 
+  # UBI 9 (and some other slim images) ship `curl-minimal` preinstalled,
+  # which conflicts with the full `curl` package.  --allowerasing tells dnf
+  # to swap them.  Harmless on UBI 8 / RHEL 8 / Fedora where there is no
+  # conflict (it becomes a normal install).
+  info "Installing curl (allowing curl-minimal swap on UBI9)"
+  dnf install -y --allowerasing curl
+
   info "Installing packages"
   dnf install -y \
-    ca-certificates git curl wget gnupg2 \
+    ca-certificates git wget gnupg2 \
     gcc gcc-c++ make cmake ninja-build gettext pkgconfig \
-    autoconf automake libtool m4 \
+    autoconf automake libtool m4 patch \
     clang clang-tools-extra lldb \
     gdb \
-    bear \
     unzip tar gzip xz \
     xclip \
     python3 python3-pip python3-devel \
     golang \
     glibc-langpack-en
+
+  # gperf lives in CRB/CodeReady-Builder on RHEL 8 and is not in every UBI 8
+  # variant.  Treat it as a soft dependency - neovim's deps build works
+  # without it in most cases.
+  if ! dnf install -y gperf; then
+    warn "gperf not available - skipping (neovim's deps build may still succeed)."
+  fi
+
+  # RHEL 8 ships python3 = 3.6 (EOL).  Install python3.11 alongside so
+  # install-user-tools.sh can pip-install modern wheels (ruff, black, ...).
+  # RHEL 9 and Fedora already ship a recent-enough python3 by default.
+  if [[ "$major" == "8" ]]; then
+    info "Installing python3.11 (RHEL 8 default python3 is 3.6, too old for modern wheels)"
+    dnf install -y python3.11 python3.11-pip python3.11-devel || \
+      warn "python3.11 not available - install-user-tools.sh may fail on pip installs."
+  fi
+
+  # bear is in EPEL 9 / Fedora but NOT in EPEL 8.  Try to install it; if
+  # unavailable, install-user-tools.sh installs compiledb (pip) instead.
+  if ! dnf install -y bear; then
+    warn "bear not available on this release - compiledb (pip) will be used instead."
+  fi
 
   dnf clean all
 }
